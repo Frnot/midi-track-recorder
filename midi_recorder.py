@@ -1,6 +1,6 @@
-# SC-88VL midi recorder v0.2
-# this script will automatically play a list of midi files and record the
-# output of the SC-88VL to corresponding audio files.
+# SC-88VL midi recorder v1.0
+# this script will automatically play a list of midi files on an SC-88VL
+# and record the output to FLAC.
 
 
 # pip install pipwin
@@ -9,7 +9,6 @@
 import os
 import threading
 import time
-import wave
 from queue import Queue
 
 GM_Reset = [0xF0, 0x7E, 0x7F, 0x09, 0x01, 0xF7]
@@ -19,8 +18,9 @@ XG_Reset = [0xF0, 0x43, 0x7F, 0x4C, 0x00, 0x00, 0x7E, 0x00, 0xF7]
 dry_run = False
 errors = []
 
-path = r"C:\Users\Frnot\Desktop\miditest"
-
+path = r""
+if not path:
+    path = os.getcwd()
 
 def main():
     autoinstall("mido")
@@ -37,7 +37,7 @@ def main():
     sample_rate = 44100  # Record at 44100 samples per second
 
     midi_device_name = "USB Midi"
-    device_id = 2
+    audio_device_id = 2
 
     midi_devices = mido.get_output_names()
     while True:
@@ -71,7 +71,7 @@ def main():
             composer_tag = "Roland SC-88VL"
             break
         elif choice == "2":
-            composer_tag = "Roland SC-88VL in SC-55 map mode"
+            composer_tag = "Roland SC-88VL (SC-55 map)"
             break
         else:
             continue
@@ -83,17 +83,15 @@ def main():
     print("Available Input Devices:")
     for i in range(0, numdevices):
         if (audio_port.get_device_info_by_host_api_device_index(0, i).get("maxInputChannels")) > 0:
-            selstring = " -> " if i is device_id else "    "
+            selstring = " -> " if i is audio_device_id else "    "
             print(f"{selstring}{i} - "
                 + audio_port.get_device_info_by_host_api_device_index(0, i).get("name")
             )
 
-    print(
-        f"Recording '{composer_tag}' on input device '{audio_port.get_device_info_by_host_api_device_index(0, device_id).get('name')}'\n"
-    )
+    print(f"Recording '{composer_tag}' on input device '{audio_port.get_device_info_by_host_api_device_index(0, audio_device_id).get('name')}'\n")
     try:
         audio_stream = audio_port.open(
-            input_device_index=device_id,
+            input_device_index=audio_device_id,
             format=sample_format,
             channels=channels,
             rate=sample_rate,
@@ -105,6 +103,7 @@ def main():
         return
 
 
+    clipped = []
     max_peak = (0, None)
     # record files
     for root, d_names, f_names in os.walk(path):
@@ -113,9 +112,8 @@ def main():
                 continue
 
             filepath = os.path.join(root, file)
-            wavpath = os.path.join(root, os.path.splitext(file)[0] + ".wav")
             flacname = os.path.splitext(file)[0] + ".flac"
-            flacpath = os.path.join(root, os.path.splitext(file)[0] + ".flac")
+            flacpath = os.path.join(root, flacname)
 
             if os.path.exists(flacpath):
                 print(f"File \"{flacname}\" already exists. skipping \"{file}\"")
@@ -139,42 +137,29 @@ def main():
                 play_thread.join()
                 record_thread.join()
                 exit()
-
-
-            # Save data to wave
-            frames = results.get()
-            try:
-                print(f"Writing to file: {flacpath}")
-                with wave.open(wavpath, "wb") as wf:
-                    wf.setnchannels(channels)
-                    wf.setsampwidth(audio_port.get_sample_size(sample_format))
-                    wf.setframerate(sample_rate)
-                    wf.writeframes(b"".join(frames))
-            except Exception as e:
-                print(e)
+            samples = results.get()
 
             # Measure audio levels
             try:
-                data, fs = soundfile.read(wavpath)
-                meter = pyloudnorm.Meter(fs)  # BS.1770 meter
-                loudness = meter.integrated_loudness(data)  # measure loudness
+                meter = pyloudnorm.Meter(sample_rate)  # BS.1770 meter
+                norm_samples = samples / numpy.iinfo(numpy.int16).max
+                loudness = meter.integrated_loudness(norm_samples)  # measure loudness
                 print(f"loudness: {loudness} LUFS")
 
-                peak = numpy.max(numpy.abs(data))
+                peak = numpy.max(numpy.abs(samples))
                 print(f"peak: {peak}")
-                if peak >= 1.0:
-                    print("\nAudio clipped\nAdjust Synth output")
-
                 if peak > max_peak[0]:
                     max_peak = (peak, file)
-
+                if peak >= numpy.iinfo(numpy.int16).max:
+                    print("\nAudio clipped. Adjust Synth output")
+                    clipped.append(file)
+                    continue
             except Exception as e:
                 print(e)
 
-            # Convert wave to flac
+            # Save data to flac
             try:
-                data, fs = soundfile.read(wavpath)
-                soundfile.write(flacpath, data, fs)
+                soundfile.write(flacpath, samples, sample_rate)
             except Exception as e:
                 print(e)
 
@@ -186,17 +171,14 @@ def main():
             except Exception as e:
                 print(e)
 
-            # Delete wave file
-            try:
-                os.remove(wavpath)
-            except Exception as e:
-                print(e)
-
-            # sleep to let possible sustain dissipate
             print()
+            
 
     audio_stream.close()
     print(f"Max peak: {max_peak[0]} - {max_peak[1]}")
+    print("Files that clipped:")
+    for file in clipped:
+        print(file)
     input()
 
 
@@ -241,7 +223,10 @@ def record_synth(stop: threading.Event, playing: threading.Event, audio_stream, 
         if stop.isSet():
             return
 
-    results.put(frames)
+    frames = numpy.frombuffer(b"".join(frames), dtype=numpy.int16)
+    samples = numpy.stack((frames[::2], frames[1::2]), axis=1)
+
+    results.put(samples)
     
 
 
