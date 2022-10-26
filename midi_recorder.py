@@ -193,8 +193,9 @@ def play_midi(stop: threading.Event, playing: threading.Event, device, filepath)
         synth.send(mido.Message.from_bytes(GS_Reset))
 
         # play file
+        midifile = mido.MidiFile(filepath, clip=True)
         playing.set()
-        for msg in mido.MidiFile(filepath).play():
+        for msg in midifile.play():
             synth.send(msg)
             if stop.isSet():
                 return
