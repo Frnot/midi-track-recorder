@@ -31,7 +31,7 @@ def main():
     autoinstall("soundfile")
 
 
-    chunk = 512  # Record in chunks of 1024 samples
+    chunk = 1024  # Record in chunks of 1024 samples
     sample_format = pyaudio.paInt16  # 16 bits per sample
     channels = 2
     sample_rate = 44100  # Record at 44100 samples per second
@@ -52,7 +52,7 @@ def main():
                 print(f"{selstring}{idx} - {option}")
             choice = input("Choose a device number (or enter for default): ")
 
-            device = default_device if choice == "" else midi_devices[int(choice)]
+            midi_device = default_device if choice == "" else midi_devices[int(choice)]
             break
         except KeyboardInterrupt:
             exit()
@@ -97,6 +97,7 @@ def main():
             rate=sample_rate,
             frames_per_buffer=chunk,
             input=True,
+            start=False,
         )
     except Exception as e:
         print(e)
@@ -122,7 +123,7 @@ def main():
             results = Queue()
             playback_event = threading.Event()
             stop_event = threading.Event()
-            play_thread = threading.Thread(target=play_midi, args=(stop_event, playback_event, device, filepath))
+            play_thread = threading.Thread(target=play_midi, args=(stop_event, playback_event, midi_device, filepath))
             record_thread = threading.Thread(target=record_synth, args=(stop_event, playback_event, audio_stream, chunk, results))
 
             # Record MIDI
@@ -136,6 +137,7 @@ def main():
                 stop_event.set()
                 play_thread.join()
                 record_thread.join()
+                audio_stream.close()
                 exit()
             samples = results.get()
 
@@ -196,6 +198,7 @@ def play_midi(stop: threading.Event, playing: threading.Event, device, filepath)
             synth.send(msg)
             if stop.isSet():
                 return
+        time.sleep(0.2)
         playing.clear()
     except Exception as e:
         print(f'Exception with file: "{filepath}"\n{e}')
@@ -214,15 +217,17 @@ def play_midi(stop: threading.Event, playing: threading.Event, device, filepath)
 
 
 def record_synth(stop: threading.Event, playing: threading.Event, audio_stream, chunk, results): 
-    print("Recording track")
     frames = []
     playing.wait()
+    audio_stream.start_stream()
+    print("Recording track")
     while playing.isSet():
         data = audio_stream.read(chunk)
         frames.append(data)
         if stop.isSet():
             return
 
+    audio_stream.stop_stream()
     frames = numpy.frombuffer(b"".join(frames), dtype=numpy.int16)
     samples = numpy.stack((frames[::2], frames[1::2]), axis=1)
 
