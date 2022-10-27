@@ -192,11 +192,24 @@ def play_midi(stop: threading.Event, playing: threading.Event, device, filepath)
         synth.send(mido.Message.from_bytes(GM_Reset))
         synth.send(mido.Message.from_bytes(GS_Reset))
 
+        # MidiFile.__iter__ takes too long to generate messages on the fly
+        midifile = [msg for msg in mido.MidiFile(filepath)]
+        start_time = time.time()
+        input_time = 0.0
+
         # play file
-        midifile = mido.MidiFile(filepath, clip=True)
         playing.set()
-        for msg in midifile.play():
-            synth.send(msg)
+        for msg in midifile:
+            if not isinstance(msg, mido.MetaMessage):
+                input_time += msg.time
+
+                playback_time = time.time() - start_time
+                duration_to_next_event = input_time - playback_time
+
+                if duration_to_next_event > 0.0:
+                    time.sleep(duration_to_next_event)
+                synth.send(msg)
+
             if stop.isSet():
                 return
         time.sleep(0.2)
