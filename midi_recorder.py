@@ -200,14 +200,15 @@ def play_midi(stop: threading.Event, playing: threading.Event, device, filepath)
         # play file
         playing.set()
         for msg in midifile:
+            input_time += msg.time
+
+            playback_time = time.time() - start_time
+            duration_to_next_event = input_time - playback_time
+
+            if duration_to_next_event > 0.0:
+                time.sleep(duration_to_next_event)
+
             if not isinstance(msg, mido.MetaMessage):
-                input_time += msg.time
-
-                playback_time = time.time() - start_time
-                duration_to_next_event = input_time - playback_time
-
-                if duration_to_next_event > 0.0:
-                    time.sleep(duration_to_next_event)
                 synth.send(msg)
 
             if stop.isSet():
