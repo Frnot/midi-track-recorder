@@ -1,4 +1,4 @@
-# SC-88VL midi recorder v1.0
+# SC-88VL midi recorder v1.1
 # this script will automatically play a list of midi files on an SC-88VL
 # and record the output to FLAC.
 
@@ -193,7 +193,7 @@ def play_midi(stop: threading.Event, playing: threading.Event, device, filepath)
         synth.send(mido.Message.from_bytes(GS_Reset))
 
         # MidiFile.__iter__ takes too long to generate messages on the fly
-        midifile = [msg for msg in mido.MidiFile(filepath)]
+        midifile = [msg for msg in mido.MidiFile(filepath, clip=True)]
         start_time = time.time()
         input_time = 0.0
 
@@ -213,7 +213,7 @@ def play_midi(stop: threading.Event, playing: threading.Event, device, filepath)
 
             if stop.isSet():
                 return
-        time.sleep(0.2)
+        time.sleep(0.3)  # let sustain ring out
         playing.clear()
     except Exception as e:
         print(f'Exception with file: "{filepath}"\n{e}')
