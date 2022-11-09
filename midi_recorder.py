@@ -1,4 +1,4 @@
-# SC-88VL midi recorder v1.1
+# SC-88VL midi recorder v1.4
 # this script will automatically play a list of midi files on an SC-88VL
 # and record the output to FLAC.
 
@@ -18,7 +18,7 @@ XG_Reset = [0xF0, 0x43, 0x7F, 0x4C, 0x00, 0x00, 0x7E, 0x00, 0xF7]
 dry_run = False
 errors = []
 
-path = r""
+path = r"C:\Users\Frnot\Music\MIDI\Duke Nukem 3D"
 if not path:
     path = os.getcwd()
 
