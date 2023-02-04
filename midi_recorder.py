@@ -1,7 +1,8 @@
-# SC-88VL midi recorder v1.4
+# SC-88VL midi recorder v1.5
 # this script will automatically play a list of midi files on an SC-88VL
 # and record the output to FLAC.
 
+# only supports Python 3.9
 
 # pip install pipwin
 # python -m pipwin install pyaudio
@@ -36,23 +37,26 @@ def main():
     channels = 2
     sample_rate = 44100  # Record at 44100 samples per second
 
-    midi_device_name = "USB Midi"
+    default_midi_device_name = "MOTU M Series MIDI Out 2"
     audio_device_id = 2
 
     midi_devices = mido.get_output_names()
     while True:
         try:
             print("Synthesizer devices:")
+            default_device = None
             for idx, option in enumerate(midi_devices):
-                if midi_device_name in option:
+                if default_midi_device_name in option:
                     default_device = option
                     selstring = " -> "
                 else:
                     selstring = "    "
                 print(f"{selstring}{idx} - {option}")
-            choice = input("Choose a device number (or enter for default): ")
 
-            midi_device = default_device if choice == "" else midi_devices[int(choice)]
+            default_msg = " (or enter for default)" if default_device else ""
+            choice = input(f"Choose a device number{default_msg}: ")
+
+            midi_device = default_device if default_device and choice == "" else midi_devices[int(choice)]
             break
         except KeyboardInterrupt:
             exit()
