@@ -24,21 +24,27 @@ if not path:
     path = os.getcwd()
 
 def main():
-    autoinstall("mido")
-    autoinstall("music_tag")
-    autoinstall("numpy")
-    autoinstall("pyaudio")
-    autoinstall("pyloudnorm")
-    autoinstall("soundfile")
+    global mido; import mido
+    global music_tag; import music_tag
+    global numpy; import numpy
+    global pyaudio; import pyaudio
+    global pyloudnorm; import pyloudnorm
+    global soundfile; import soundfile
 
 
-    chunk = 1024  # Record in chunks of 1024 samples
+    chunk = 256  # Record in chunks of 1024 samples
     sample_format = pyaudio.paInt16  # 16 bits per sample
     channels = 2
-    sample_rate = 44100  # Record at 44100 samples per second
+    sample_rate = 48000  # Record at 44100 samples per second
 
     default_midi_device_name = "MOTU M Series MIDI Out 2"
-    audio_device_id = 2
+    default_audio_device_id = 2
+
+
+    #import pyaudio
+    audio_port = pyaudio.PyAudio()  # Create an interface to PortAudio
+    print(f"Loaded portaudio version {pyaudio.get_portaudio_version_text()}")
+
 
     midi_devices = mido.get_output_names()
     while True:
@@ -81,18 +87,38 @@ def main():
             continue
 
 
-    audio_port = pyaudio.PyAudio()  # Create an interface to PortAudio
+    
     info = audio_port.get_host_api_info_by_index(0)
     numdevices = info.get("deviceCount")
-    print("Available Input Devices:")
-    for i in range(0, numdevices):
-        if (audio_port.get_device_info_by_host_api_device_index(0, i).get("maxInputChannels")) > 0:
-            selstring = " -> " if i is audio_device_id else "    "
-            print(f"{selstring}{i} - "
-                + audio_port.get_device_info_by_host_api_device_index(0, i).get("name")
-            )
+    while True:
+        try:
+            print("Available Input Devices:")
+            valid_ids = []
+            for i in range(0, numdevices):
+                if (audio_port.get_device_info_by_host_api_device_index(0, i).get("maxInputChannels")) > 0:
+                    valid_ids.append(i)
+                    selstring = " -> " if i is default_audio_device_id else "    "
+                    print(f"{selstring}{i} - "
+                        + audio_port.get_device_info_by_host_api_device_index(0, i).get("name")
+                    )
+            
+            default_msg = " (or enter for default)" if default_device else ""
+            choice = input(f"Choose a device number{default_msg}: ")
 
-    print(f"Recording '{composer_tag}' on input device '{audio_port.get_device_info_by_host_api_device_index(0, audio_device_id).get('name')}'\n")
+            audio_device_id = default_audio_device_id if default_audio_device_id and choice == "" else int(choice)
+            if audio_device_id not in valid_ids:
+                raise ValueError
+            input_device = audio_port.get_device_info_by_host_api_device_index(0, audio_device_id)
+            break
+        except KeyboardInterrupt:
+            exit()
+        except (OSError, ValueError):
+            print("Enter a valid device number")
+            continue
+            
+    
+
+    print(f"Recording '{composer_tag}' on input device '{input_device.get('name')}'\n")
     try:
         audio_stream = audio_port.open(
             input_device_index=audio_device_id,
@@ -159,7 +185,7 @@ def main():
                 if peak >= numpy.iinfo(numpy.int16).max:
                     print("\nAudio clipped. Adjust Synth output")
                     clipped.append(file)
-                    continue
+                    #continue
             except Exception as e:
                 print(e)
 
@@ -251,25 +277,19 @@ def record_synth(stop: threading.Event, playing: threading.Event, audio_stream, 
     samples = numpy.stack((frames[::2], frames[1::2]), axis=1)
 
     results.put(samples)
-    
-
-
-def autoinstall(package):
-    import importlib
-    try:
-        globals()[package] = importlib.import_module(package)
-    except ModuleNotFoundError as missing_pkg:
-        inp = input(f"Package '{missing_pkg.name}' required. Install it now? (y/N): ")
-        if "y" in inp.lower():
-            import subprocess
-            import sys
-            subprocess.check_call([sys.executable, "-m", "pip", "install", missing_pkg.name])
-            print("\n")
-            globals()[package] = importlib.import_module(package)
-        else:
-            quit()
 
 
 
 if __name__ == "__main__":
-    main()
+    while True:
+        try:
+            main()
+        except ModuleNotFoundError as missing_pkg:
+            inp = input(f"Package '{missing_pkg.name}' required. Install it now? (y/N): ")
+            if "y" in inp.lower():
+                import subprocess
+                import sys
+                subprocess.check_call([sys.executable, "-m", "pip", "install", missing_pkg.name])
+                print("\n")
+                continue
+            break
