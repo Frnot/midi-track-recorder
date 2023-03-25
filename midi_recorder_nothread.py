@@ -22,8 +22,8 @@ from queue import Queue
 class Sig(Enum):
     TERM = 1
     STOP = 2
-    PLAYING = 3
-    COMPLETE = 4
+    COMPLETE = 3
+    FAIL = 4
 
 GM_Reset = [0xF0, 0x7E, 0x7F, 0x09, 0x01, 0xF7]
 GS_Reset = [0xF0, 0x41, 0x7F, 0x42, 0x12, 0x40, 0x00, 0x7F, 0x00, 0x41, 0xF7]
@@ -172,6 +172,7 @@ def main():
             playing = True
             try:
                 while not task_queue.empty():
+                    #print("schedloop")
                     task = task_queue.get()
 
                     sig = None if playing else Sig.COMPLETE
@@ -183,8 +184,8 @@ def main():
                     if sig != Sig.STOP:
                         task_queue.put(task)
             except KeyboardInterrupt:
-                for task in task_queue:
-                    task.send(Sig.TERM)
+                while not task_queue.empty():
+                    task_queue.get().send(Sig.TERM)
                 audio_stream.close()
                 exit()
 
@@ -264,9 +265,11 @@ def play_midi(device, filepath):
         while time.time() < wait_time:
             yield
         yield Sig.COMPLETE
-    except Exception as e:
+    except KeyboardInterrupt as e:
+        raise e
+    except Exception as e: #TODO fix this
         print(f'Exception with file: "{filepath}"\n{e}')
-        return False
+        return
     finally:
         print("Stopping MIDI playback")
         for i in range(16):
@@ -275,7 +278,7 @@ def play_midi(device, filepath):
         synth.send(mido.Message.from_bytes(GM_Reset))
         synth.send(mido.Message.from_bytes(GS_Reset))
         synth.close()
-        yield Sig.STOP
+    yield Sig.STOP
 
 
 @coroutine
@@ -284,16 +287,19 @@ def record_synth(audio_stream, chunk, frames):
     yield
     print("Recording track")
     audio_stream.start_stream()
-    while True:
-        if audio_stream.get_read_available() >= partial_chunk:
-            data = audio_stream.read(chunk)
-            sig = yield
-            frames.append(data)
-            sig = yield
-        else:
-            sig = yield
-        if sig == Sig.TERM or sig == Sig.COMPLETE:
-            break
+    try:
+        while True:
+            if audio_stream.get_read_available() >= partial_chunk:
+                data = audio_stream.read(chunk)
+                sig = yield
+                frames.append(data)
+                sig = yield
+            else:
+                sig = yield
+            if sig == Sig.TERM or sig == Sig.COMPLETE:
+                break
+    except KeyboardInterrupt as e:
+        raise e
 
     print("Finished recording")
     audio_stream.stop_stream()
