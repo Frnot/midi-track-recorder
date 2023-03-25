@@ -1,4 +1,4 @@
-# SC-88VL midi recorder v1.5
+# SC-88VL midi recorder v2.0mt
 # this script will automatically play a list of midi files on an SC-88VL
 # and record the output to FLAC.
 
@@ -7,17 +7,23 @@
 # pip install pipwin
 # python -m pipwin install pyaudio
 
+## This is an exercise to see if I could create a multitasking scheduler 
+# without the use of threads or subprocesses. This code is highly experimental 
+# and likely has inaccurate timing. For any "production" use, I recommend
+# using the normal variant of this script (midi_recorder.py).
 
-#TODO: make this single threaded using coroutines
-# playmidi() pulls instructions off of queue, will yield if duration_to_next_event > 0.0 
-## yield duration_to_next_event to scheduler so it can wait if necessary
-# generate midi will populate queue, yields after every generation event
-##  if queue is full , dont call generate_midi, instead tell playmidi to wait
 
 import os
-import threading
 import time
+from enum import Enum
 from queue import Queue
+
+
+class Sig(Enum):
+    TERM = 1
+    STOP = 2
+    PLAYING = 3
+    COMPLETE = 4
 
 GM_Reset = [0xF0, 0x7E, 0x7F, 0x09, 0x01, 0xF7]
 GS_Reset = [0xF0, 0x41, 0x7F, 0x42, 0x12, 0x40, 0x00, 0x7F, 0x00, 0x41, 0xF7]
@@ -39,7 +45,7 @@ def main():
     global soundfile; import soundfile
 
 
-    chunk = 256  # Record in chunks of 1024 samples
+    chunk = 2048  # Record in chunks of 1024 samples
     sample_format = pyaudio.paInt16  # 16 bits per sample
     channels = 2
     sample_rate = 48000  # Record at 48000 samples per second
@@ -157,26 +163,34 @@ def main():
                 print(f"File \"{flacname}\" already exists. skipping \"{file}\"")
                 continue
 
-            results = Queue()
-            playback_event = threading.Event()
-            stop_event = threading.Event()
-            play_thread = threading.Thread(target=play_midi, args=(stop_event, playback_event, midi_device, filepath))
-            record_thread = threading.Thread(target=record_synth, args=(stop_event, playback_event, audio_stream, chunk, results))
+            frames = []
+            task_queue = Queue()
+            task_queue.put(record_synth(audio_stream, chunk, frames))
+            task_queue.put(play_midi(midi_device, filepath))
 
             # Record MIDI
+            playing = True
             try:
-                record_thread.start()
-                play_thread.start()
+                while not task_queue.empty():
+                    task = task_queue.get()
 
-                while play_thread.is_alive() and record_thread.is_alive():
-                    time.sleep(0.1)
+                    sig = None if playing else Sig.COMPLETE
+                    sig = task.send(sig)
+
+                    if sig == Sig.COMPLETE:
+                        playing = False
+
+                    if sig != Sig.STOP:
+                        task_queue.put(task)
             except KeyboardInterrupt:
-                stop_event.set()
-                play_thread.join()
-                record_thread.join()
+                for task in task_queue:
+                    task.send(Sig.TERM)
                 audio_stream.close()
                 exit()
-            samples = results.get()
+
+            # Convert PyAudio frames to audio samples
+            frames = numpy.frombuffer(b"".join(frames), dtype=numpy.int16)
+            samples = numpy.stack((frames[::2], frames[1::2]), axis=1)
 
             # Measure audio levels
             try:
@@ -221,24 +235,35 @@ def main():
     input()
 
 
+def coroutine(func):
+    def start(*args,**kwargs):
+        cr = func(*args,**kwargs)
+        next(cr)
+        return cr
+    return start
 
-def play_midi(stop: threading.Event, playing: threading.Event, device, filepath):
+
+@coroutine
+def play_midi(device, filepath):
     try:
-        print(f"Playing '{os.path.basename(filepath)}'")
         synth = mido.open_output(device)
         synth.send(mido.Message.from_bytes(GM_Reset))
         synth.send(mido.Message.from_bytes(GS_Reset))
-
+        yield
+        
         # play file
-        playing.set()
+        print(f"Playing '{os.path.basename(filepath)}'")
         for msg in mido.MidiFile(filepath, clip=True).play():
             synth.send(msg)
-        
-            if stop.isSet():
+            sig = yield
+            if sig == Sig.TERM:
                 return
 
-        time.sleep(0.3)  # let sustain ring out
-        playing.clear()
+        # let sustain ring out
+        wait_time = time.time() + 0.3
+        while time.time() < wait_time:
+            yield
+        yield Sig.COMPLETE
     except Exception as e:
         print(f'Exception with file: "{filepath}"\n{e}')
         return False
@@ -250,35 +275,29 @@ def play_midi(stop: threading.Event, playing: threading.Event, device, filepath)
         synth.send(mido.Message.from_bytes(GM_Reset))
         synth.send(mido.Message.from_bytes(GS_Reset))
         synth.close()
-
-    return True
-
+        yield Sig.STOP
 
 
-def record_synth(stop: threading.Event, playing: threading.Event, audio_stream, chunk, results): 
-    frames = []
-    playing.wait()
-    audio_stream.start_stream()
+@coroutine
+def record_synth(audio_stream, chunk, frames): 
+    partial_chunk = int(chunk*0.9)
+    yield
     print("Recording track")
-    while playing.isSet():
-        data = audio_stream.read(chunk)
-        frames.append(data)
-        if stop.isSet():
-            return
+    audio_stream.start_stream()
+    while True:
+        if audio_stream.get_read_available() >= partial_chunk:
+            data = audio_stream.read(chunk)
+            sig = yield
+            frames.append(data)
+            sig = yield
+        else:
+            sig = yield
+        if sig == Sig.TERM or sig == Sig.COMPLETE:
+            break
 
+    print("Finished recording")
     audio_stream.stop_stream()
-    frames = numpy.frombuffer(b"".join(frames), dtype=numpy.int16)
-    samples = numpy.stack((frames[::2], frames[1::2]), axis=1)
-
-    results.put(samples)
-
-
-def coroutine(func):
-    def start(*args,**kwargs):
-        cr = func(*args,**kwargs)
-        cr.next()
-        return cr
-    return start
+    yield Sig.STOP
 
 
 if __name__ == "__main__":
